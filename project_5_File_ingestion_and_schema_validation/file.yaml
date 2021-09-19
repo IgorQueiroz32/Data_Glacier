@@ -1,0 +1,11 @@
+file_type: csv
+dataset_name: testfile
+file_name: reviews
+table_name: edsurv
+inbound_delimiter: ","
+outbound_delimiter: "|"
+skip_leading_rows: 1
+columns: 
+    - polarity
+    - recommendation
+    - buy_other_product
