@@ -1,0 +1,53 @@
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import warnings
+
+warnings.filterwarnings('ignore')
+import streamlit as st
+import altair as alt
+
+# ______________________________________________________________________________________________________________________
+df_cab_data_raw = pd.read_csv('C:/Users/Igor/repos/data_glacier/project_2/G2M_Cab_DataSets/Taxi-Cab-Data-Analysis-and-Insights/datasets/Cab_Data.csv', low_memory=False)
+df_city_raw = pd.read_csv('C:/Users/Igor/repos/data_glacier/project_2/G2M_Cab_DataSets/Taxi-Cab-Data-Analysis-and-Insights/datasets/City.csv', low_memory=False)
+df_customer_id_raw = pd.read_csv('C:/Users/Igor/repos/data_glacier/project_2/G2M_Cab_DataSets/Taxi-Cab-Data-Analysis-and-Insights/datasets/Customer_ID.csv', low_memory=False)
+df_states_raw = pd.read_csv('C:/Users/Igor/repos/data_glacier/project_2/G2M_Cab_DataSets/Taxi-Cab-Data-Analysis-and-Insights/datasets/states.csv', low_memory=False)
+df_transaction_id_raw = pd.read_csv('C:/Users/Igor/repos/data_glacier/project_2/G2M_Cab_DataSets/Taxi-Cab-Data-Analysis-and-Insights/datasets/Transaction_ID.csv', low_memory=False)
+df_us_holidays_raw = pd.read_csv('C:/Users/Igor/repos/data_glacier/project_2/G2M_Cab_DataSets/Taxi-Cab-Data-Analysis-and-Insights/datasets/us-federal-holidays-2011-2020.csv', low_memory=False)
+
+# merge datasets
+df_raw = pd.merge(df_cab_data_raw, df_transaction_id_raw, how='left', on='Transaction ID')
+df_raw_1 = pd.merge(df_raw, df_customer_id_raw, how='left', on='Customer ID')
+
+# Renaming column Date of Travel
+df_raw_1.rename(columns={'Date of Travel':'Date'}, inplace=True)
+
+df_raw_2 = pd.merge(df_raw_1, df_us_holidays_raw, how='left', on='Date')
+df_raw_2
+st.set_page_config(layout='wide')
+st.dataframe(df_cab_data_raw.head(20))
+
+
+#st.set_page_config(layout='wide')
+
+#
+# # read data
+# @st.cache(allow_output_mutation=True)
+# def get_data(path):
+#     data = pd.read_csv(path)
+#
+#     return data
+#
+# path1 = 'C:/Users/Igor/repos/data_glacier/project_2/G2M_Cab_DataSets/Taxi-Cab-Data-Analysis-and-Insights/datasets/Cab_Data.csv'
+# # path2 = 'City.csv'
+# # path3 = 'Customer_ID.csv'
+# # path4 = 'states.csv'
+# # path5 = 'Transaction_ID.csv'
+# # path6 = 'us-federal-holidays-2011-2020.csv'
+#
+# df_cab_data_raw = get_data(path1)
+# # df_city_raw = get_data(path2)
+# # df_customer_id_raw = get_data(path3)
+# # df_states_raw = get_data(path4)
+# # df_transaction_id_raw = get_data(path5)
+# # df_us_holidays_raw = get_data(path6)
