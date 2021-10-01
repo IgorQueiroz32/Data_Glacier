@@ -1,0 +1,878 @@
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import warnings
+
+warnings.filterwarnings('ignore')
+import streamlit as st
+import altair as alt
+
+# ______________________________________________________________________________________________________________________
+st.set_page_config(layout='wide')
+
+
+# read data
+@st.cache(allow_output_mutation=True)
+def get_data(path):
+    data = pd.read_csv(path)
+
+    return data
+
+
+# _______________________________________________________________________________________________________________________
+# 1 data preparation
+def preparation(df_cab_data_raw, df_transaction_id_raw, df_customer_id_raw, df_us_holidays_raw):
+    st.title("XYZ Firm")
+    st.header('Analysis to decide in each Cab company (Yellow Cab Company or Pink Cab Company) to invest')
+
+    # merge datasets
+    df_raw = pd.merge(df_cab_data_raw, df_transaction_id_raw, how='left', on='Transaction ID')
+    df_raw_1 = pd.merge(df_raw, df_customer_id_raw, how='left', on='Customer ID')
+
+    # Renaming column Date of Travel
+    df_raw_1.rename(columns={'Date of Travel': 'Date'}, inplace=True)
+
+    df_raw_2 = pd.merge(df_raw_1, df_us_holidays_raw, how='left', on='Date')
+
+    return df_raw_2
+
+
+def description(df_raw_2):
+    # data description
+    df1 = df_raw_2.copy()
+
+    # rename columns
+    df1.columns = ['transaction_id', 'date', 'company', 'city', 'km_travelled',
+                   'price_charged', 'cost_of_trip', 'customer_id', 'payment_mode',
+                   'gender', 'age', 'income_USD_month', 'holiday']
+
+    # changing date type
+    df1['date'] = pd.to_datetime(df1['date'])
+
+    # chek NA
+    df1.isna().sum()
+
+    # fillout NA using business logic
+    # holiday
+    # Replacing all NaN values for 'Regular day'
+    df1['holiday'] = df1['holiday'].replace(np.nan, 'Regular day', regex=True)
+
+    st.header('XYZ Dataset')
+    st.dataframe(df1.head(20))
+
+    # _______________________________________________________________________________________________________________________
+    # descriptive statistics
+
+    # numerical atributes
+    num_attributes = df1.select_dtypes(include=['int64', 'float64'])
+
+    # central tendency - mean, median
+    ct1 = pd.DataFrame(num_attributes.apply(np.mean)).T
+    ct2 = pd.DataFrame(num_attributes.apply(np.median)).T
+
+    # dispersion - std, min ,max, range, skew, kurtosis
+    d1 = pd.DataFrame(num_attributes.apply(np.std)).T
+    d2 = pd.DataFrame(num_attributes.apply(min)).T
+    d3 = pd.DataFrame(num_attributes.apply(max)).T
+    d4 = pd.DataFrame(num_attributes.apply(lambda x: x.max() - x.min())).T  # range
+    d5 = pd.DataFrame(num_attributes.apply(lambda x: x.skew())).T  # skew
+    d6 = pd.DataFrame(num_attributes.apply(lambda x: x.kurtosis())).T  # kurtosis
+
+    # concatenate
+    m = pd.concat([d2, d3, d4, ct1, ct2, d1, d5, d6]).T.reset_index()
+    m.columns = ['attributes', 'min', 'max', 'range', 'mean', 'median', 'std', 'skew', 'kurtosis']
+    pd.set_option('display.float_format', lambda x: '%.2f' % x)
+
+    st.header('Numerical Descriptive Statistics')
+    st.dataframe(m, height=600)
+
+    return df1
+
+
+# _______________________________________________________________________________________________________________________
+def feature_engineering(df1):
+    # feature engineering
+    df2 = df1.copy()
+
+    # creating profit variable
+    df2['profit'] = (df2['price_charged'] - df2['cost_of_trip']).apply(lambda x: x)
+
+    # separating varialbe date
+
+    # year
+    df2['year'] = df2['date'].dt.year
+
+    # month
+    df2['month'] = df2['date'].dt.month
+
+    # day
+    df2['day'] = df2['date'].dt.day
+
+    # year month
+    df2['year_month'] = df2['date'].dt.strftime('%Y-%m')
+
+    # year week
+    df2['year_week'] = df2['date'].dt.strftime('%Y-%W')
+
+    # month_day
+    df2['month_day'] = pd.to_datetime(df2['date']).dt.strftime('%m-%d')
+
+    # #creating variables season
+    df2['season'] = df2.apply(lambda x: 'spring' if (x['month_day'] >= '03-01') & (x['month_day'] <= '05-31') else
+    'summer' if (x['month_day'] >= '06-01') & (x['month_day'] <= '08-31') else
+    'fall' if (x['month_day'] >= '09-01') & (x['month_day'] <= '11-30') else
+    'winter', axis=1)
+
+    # Followign the Business Assumptions from README, it will be added the state code for the cities SILICON VALLEY and ORANGE COUNTY,
+    # that is CAlofornia CA for both
+    df2['city'] = df2['city'].apply(lambda x: 'SILICON VALLEY CA' if x == 'SILICON VALLEY' else
+    'ORANGE COUNTY CA' if x == 'ORANGE COUNTY' else x)
+
+    # spilt city in two columns
+    new = df2['city'].str.rsplit(" ", n=1, expand=True)
+
+    # making separate first name column from new data frame
+    df2["cities"] = new[0]
+
+    # making separate last name column from new data frame
+    df2["State Code"] = new[1]
+
+    # Dropping old Name columns
+    df2.drop(columns=["city"], inplace=True)
+
+    # merge df2 with dataset df_states_raw
+    df2 = pd.merge(df2, df_states_raw, how='left', on='State Code')
+
+    # Renaming column State Code
+    df2.rename(columns={'State Code': 'state_code', 'State': 'state', 'Region': 'region', 'Division': 'division'},
+               inplace=True)
+
+    # drop column State
+    df2 = df2.drop('state', axis=1)
+
+    return df2
+
+
+# _______________________________________________________________________________________________________________________
+def outliers_detection(df2):
+    # Outliers detection
+
+    st.header('Outliers - Attribute Profit')
+    fig = px.box(df2, 'profit')
+    st.plotly_chart(fig, use_container_width=True)
+
+    fig = px.scatter(df2, x='cost_of_trip', y='profit', color='company', )
+    st.plotly_chart(fig, use_container_width=True)
+
+    fig = px.scatter(df2, x='km_travelled', y='profit', color='company', )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.write(
+        "**Dispite the boxplot shows that there are a lots of outliers from a value of 433 from the variable profit, the others scatterplots shows a pattern of distribution, with few outliers from value of arround 1250, just for the Yellow Cab company.**")
+    st.write("**Also the yellow company shows a number of travel so much higher than the Pink Cab.**")
+    st.write("**For those reasons, it is not necessary exclude any outlier of this dataset.**")
+
+    # _______________________________________________________________________________________________________________________
+    # exploratory data analysis (EDA)
+
+    st.header('EDA - Attribute Profit')
+    fig = px.histogram(df2, 'profit')
+    st.plotly_chart(fig, use_container_width=True)
+    st.write("**This attribute has some kurtosis and presents a positive skew, which is to the left.**")
+
+    return None
+
+
+# _______________________________________________________________________________________________________________________
+def business_questions(df2):
+    st.title('BUSINESS QUESTIONS')
+    st.header('Question 1 - How many travels each company made?')
+
+    # Total (count)
+    q1 = df2[['company', 'transaction_id']].groupby('company').count().reset_index()
+    q1.columns = ['company_sum', 'transaction_id_sum']
+
+    for i in range(len(q1)):
+        q1.loc[i, 'percentage'] = (q1.loc[i, 'transaction_id_sum']) / (sum(q1['transaction_id_sum'])) * 100
+
+    q1_difference = q1.iloc[1, 1] - q1.iloc[0, 1]
+
+    q1_percentage = round((q1.loc[1, 'percentage']) - (q1.loc[0, 'percentage']), 2)
+
+    c1, c2 = st.beta_columns((1, 1))
+    fig = px.bar(q1.sort_values('transaction_id_sum', ascending=False), x='company_sum', y='transaction_id_sum',
+                 color='company_sum', color_discrete_sequence=['yellow', 'pink'])
+    c1.plotly_chart(fig, use_container_width=True)
+
+    c2.dataframe(q1, height=600)
+    st.write('**In total, The company {} has {} ({}%) more taxi travels than the company {}.**'.format(q1.iloc[1, 0],
+                                                                                                       q1_difference,
+                                                                                                       q1_percentage,
+                                                                                                       q1.iloc[0, 0]),
+             end='\n\n')
+
+    # _______________________________________________________________________________________________________________________
+    st.header('Question 2 - What is the total of money made by each company?')
+    # Total (sum)
+    q2 = df2[['company', 'profit']].groupby('company').sum().reset_index()
+    q2.columns = ['company_sum', 'profit_sum']
+
+    for i in range(len(q2)):
+        q2.loc[i, 'percentage'] = (q2.loc[i, 'profit_sum']) / (sum(q2['profit_sum'])) * 100
+
+    q2_difference = q2.iloc[1, 1] - q2.iloc[0, 1]
+
+    q2_percentage = round((q2.loc[1, 'percentage']) - (q2.loc[0, 'percentage']), 2)
+
+    c1, c2 = st.beta_columns((1, 1))
+    fig = px.bar(q2.sort_values('profit_sum', ascending=False), x='company_sum', y='profit_sum', color='company_sum',
+                 color_discrete_sequence=['yellow', 'pink'])
+    c1.plotly_chart(fig, use_container_width=True)
+
+    c2.dataframe(q2, height=600)
+    st.write('**In total, the company {} has ${} ({}%) more profit than the company {}.**'.format(q2.iloc[1, 0],
+                                                                                                  q2_difference,
+                                                                                                  q2_percentage,
+                                                                                                  q2.iloc[0, 0]),
+             end='\n\n')
+
+    # Average (mean)
+    q1_1 = df2[['company', 'profit']].groupby('company').mean().reset_index()
+    q1_1.columns = ['company_average', 'profit_average']
+
+    q1_1_difference = round(q1_1.iloc[1, 1] - q1_1.iloc[0, 1], 2)
+
+    # (produto maior - produto menor)  / produto menor  * 100
+    q1_1_percentage = round(
+        ((q1_1.loc[1, 'profit_average']) - (q1_1.loc[0, 'profit_average'])) / (q1_1.loc[0, 'profit_average']) * 100, 2)
+
+    c1, c2 = st.beta_columns((1, 1))
+    fig = px.bar(q1_1.sort_values('profit_average', ascending=False), x='company_average', y='profit_average',
+                 color='company_average', color_discrete_sequence=['yellow', 'pink'])
+    c1.plotly_chart(fig, use_container_width=True)
+
+    c2.dataframe(q1_1, height=600)
+    st.write(
+        '**On average, also, the company {} has ${} ({}%) more profit than the company {}.**'.format(q1_1.iloc[1, 0],
+                                                                                                     q1_1_difference,
+                                                                                                     q1_1_percentage,
+                                                                                                     q1_1.iloc[0, 0]),
+        end='\n\n')
+
+    # _______________________________________________________________________________________________________________________
+    st.header('Question 3 - In total, how many travels each company made trough this 3 years in each area?')
+    q3 = df2[['cities', 'state_code', 'division', 'region', 'transaction_id', 'company']]
+    q3.columns = ['cities', 'state_code', 'division', 'region', 'transaction_id_sum', 'company_sum']
+
+    q3_1 = q3[['cities', 'transaction_id_sum', 'company_sum']].groupby(['cities', 'company_sum']).count().reset_index()
+    fig = px.bar(q3_1.sort_values('transaction_id_sum', ascending=False), x='cities', y='transaction_id_sum',
+                 color='company_sum', barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    q3_2 = q3[['state_code', 'transaction_id_sum', 'company_sum']].groupby(
+        ['state_code', 'company_sum']).count().reset_index()
+    fig = px.bar(q3_2.sort_values('transaction_id_sum', ascending=False), x='state_code', y='transaction_id_sum',
+                 color='company_sum', barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    q3_3 = q3[['division', 'transaction_id_sum', 'company_sum']].groupby(
+        ['division', 'company_sum']).count().reset_index()
+    fig = px.bar(q3_3.sort_values('transaction_id_sum', ascending=False), x='division', y='transaction_id_sum',
+                 color='company_sum', barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    q3_4 = q3[['region', 'transaction_id_sum', 'company_sum']].groupby(['region', 'company_sum']).count().reset_index()
+    fig = px.bar(q3_4.sort_values('transaction_id_sum', ascending=False), x='region', y='transaction_id_sum',
+                 color='company_sum', barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    # _______________________________________________________________________________________________________________________
+    st.header('Question 4 - In average, which area of US the Cab companies provide higher incomes?')
+    q4 = df2[['cities', 'state_code', 'division', 'region', 'profit', 'company']]
+    q4.columns = ['cities', 'state_code', 'division', 'region', 'profit_average', 'company_average']
+
+    q4_1 = q4[['cities', 'profit_average', 'company_average']].groupby(
+        ['cities', 'company_average']).count().reset_index()
+    fig = px.bar(q4_1.sort_values('profit_average', ascending=False), x='cities', y='profit_average',
+                 color='company_average', barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    q4_2 = q4[['state_code', 'profit_average', 'company_average']].groupby(
+        ['state_code', 'company_average']).count().reset_index()
+    fig = px.bar(q4_2.sort_values('profit_average', ascending=False), x='state_code', y='profit_average',
+                 color='company_average', barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    q4_3 = q4[['division', 'profit_average', 'company_average']].groupby(
+        ['division', 'company_average']).count().reset_index()
+    fig = px.bar(q4_3.sort_values('profit_average', ascending=False), x='division', y='profit_average',
+                 color='company_average', barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    q4_4 = q4[['region', 'profit_average', 'company_average']].groupby(
+        ['region', 'company_average']).count().reset_index()
+    fig = px.bar(q4_4.sort_values('profit_average', ascending=False), x='region', y='profit_average',
+                 color='company_average', barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    # _______________________________________________________________________________________________________________________
+    st.header('Question 5 - How many travels each company has on each season, in total?')
+    q5 = df2[['season', 'transaction_id', 'company']].groupby(['season', 'company']).count().reset_index()
+    q5.columns = ['season', 'company_sum', 'transaction_id_sum']
+
+    for i in range(len(q5)):
+        q5.loc[i, 'percentage'] = round((q5.loc[i, 'transaction_id_sum']) / (sum(q5['transaction_id_sum'])) * 100, 2)
+
+    c1, c2 = st.beta_columns((1, 1))
+    fig = px.bar(q5.sort_values('transaction_id_sum', ascending=False), x='season', y='transaction_id_sum',
+                 color='company_sum', barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    c1.plotly_chart(fig, use_container_width=True)
+
+    c2.dataframe(q5, height=600)
+    st.write(
+        '**On total, the season {} for the company {} has the highest percentage of taxi travels among all seasons, with {}%.**'.format(
+            q5.iloc[1, 0], q5.iloc[1, 1], q5.iloc[1, 3]), end='\n\n')
+
+    # _______________________________________________________________________________________________________________________
+    st.header('Question 6 - Which season the Cab companies provide higher incomes, on average?')
+
+    # Total (sum)
+    q6 = df2[['season', 'profit', 'company']].groupby(['season', 'company']).sum().reset_index()
+    q6.columns = ['season', 'company_sum', 'profit_sum']
+
+    for i in range(len(q6)):
+        q6.loc[i, 'percentage'] = (q6.loc[i, 'profit_sum']) / (sum(q6['profit_sum'])) * 100
+
+    c1, c2 = st.beta_columns((1, 1))
+    fig = px.bar(q6.sort_values('profit_sum', ascending=False), x='season', y='profit_sum', color='company_sum',
+                 barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    c1.plotly_chart(fig, use_container_width=True)
+
+    c2.dataframe(q6, height=600)
+    st.write(
+        '**On total, the season {} for the company {} has the highest amount of profit among all seasons, with ${} ({}%).**'.format(
+            q6.iloc[1, 0], q6.iloc[1, 1], round(q6.iloc[1, 2], 2), round(q6.iloc[1, 3], 2)), end='\n\n')
+
+    # Average (mean)
+    q6_1 = df2[['season', 'profit', 'company']].groupby(['season', 'company']).mean().reset_index()
+    q6_1.columns = ['season', 'company_average', 'profit_average']
+
+    c1, c2 = st.beta_columns((1, 1))
+    fig = px.bar(q6_1.sort_values('profit_average', ascending=False), x='season', y='profit_average',
+                 color='company_average', barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    c1.plotly_chart(fig, use_container_width=True)
+
+    c2.dataframe(q6_1, height=600)
+    st.write(
+        '**However, on average, the season {} for the company {} has the highest amount of profit among all seasons, with ${}.**'.format(
+            q6_1.iloc[3, 0], q6_1.iloc[3, 1], round(q6_1.iloc[3, 2], 2)), end='\n\n')
+
+    # _______________________________________________________________________________________________________________________
+    st.header('Question 7 - How many customers each company has?')
+
+    aux = df2.drop_duplicates(subset=['customer_id'])
+    q7 = aux[['company', 'customer_id']].groupby('company').count().reset_index()
+    q7.columns = ['company_sum', 'customer_id_sum']
+
+    for i in range(len(q2)):
+        q7.loc[i, 'percentage'] = (q7.loc[i, 'customer_id_sum']) / (sum(q7['customer_id_sum'])) * 100
+
+    q7_difference = q7.iloc[1, 1] - q7.iloc[0, 1]
+
+    q7_percentage = round(((q7.loc[1, 'customer_id_sum']) / (sum(q7['customer_id_sum'])) * 100) - (
+            (q7.loc[0, 'customer_id_sum']) / (sum(q7['customer_id_sum'])) * 100), 2)
+
+    c1, c2 = st.beta_columns((1, 1))
+    fig = px.bar(q7.sort_values('customer_id_sum', ascending=False), x='company_sum', y='customer_id_sum',
+                 color='company_sum', color_discrete_sequence=['yellow', 'pink'])
+    c1.plotly_chart(fig, use_container_width=True)
+
+    c2.dataframe(q7, height=600)
+    st.write('**In total, the company {} has {} ({}%) more customers than the company {}.**'.format(q7.iloc[1, 0],
+                                                                                                    q7_difference,
+                                                                                                    q7_percentage,
+                                                                                                    q7.iloc[0, 0]),
+             end='\n\n')
+
+    # _______________________________________________________________________________________________________________________
+    st.header('Answering the Business Questions')
+    st.write(
+        '**Yellow Cab company has a higher number of taxi trips than Pink Cab company, as well as a higher profit and higher number of customers.**')
+    st.write(
+        '**The data also show that Yellow Cab has superior results in almost all cities, especially in New York, which is the city with the highest profit and higher number of taxi trips.**')
+    st.write(
+        '**The same company also stands out from the other company in relation to the season, where the fall or spring (depending which measure is more important) season shows the highest profit and number of taxi trips as well.**')
+    st.write('**Due those all information, it is recommended to invest in Yellow Cab company.**')
+
+    return None
+
+
+# _______________________________________________________________________________________________________________________
+def Hypotesis(df2, df_city_raw):
+    st.title('Hypotesis')
+
+    # _______________________________________________________________________________________________________________________
+    st.header(
+        'H1. The number of users of the Yellow Cab plus Pink Cab is the same number of the Total Cab Users at every city.')
+    st.write(
+        '**FALSE - There are others Cab companies at each state, which the range of customers in others companies floats between 70% and 99%, depending of the state.**')
+
+    H1 = df_city_raw.copy()
+
+    H1['City'] = H1['City'].apply(lambda x: 'SILICON VALLEY CA' if x == 'SILICON VALLEY' else
+    'ORANGE COUNTY CA' if x == 'ORANGE COUNTY' else x)
+
+    # spilt city in two columns
+    new = H1['City'].str.rsplit(" ", n=1, expand=True)
+
+    # making separate first name column from new data frame
+    H1["cities"] = new[0]
+
+    # making separate last name column from new data frame
+    H1["State Code"] = new[1]
+
+    # Dropping old Name columns
+    H1.drop(columns=["State Code"], inplace=True)
+    H1.drop(columns=["City"], inplace=True)
+    H1.drop(columns=['Population'], inplace=True)
+    H1.drop(H1[H1['cities'] == 'SAN FRANCISCO'].index, inplace=True)
+
+    # droping duplicates on customer id and grouping it by cities
+    aux1 = df2.drop_duplicates(subset=['customer_id'])
+    aux2 = aux1[['cities', 'customer_id']].groupby(['cities']).count().reset_index()
+
+    # merge df_city_raw with dataset z
+    H1 = pd.merge(H1, aux2, how='left', on='cities')
+
+    # treating dataset
+    H1['Users'] = H1['Users'].replace(',', '', regex=True)
+    H1['Users'] = H1['Users'].astype(np.float64)
+
+    # creating new variable
+    H1['others_cab_co'] = (H1['Users'] - H1['customer_id']).apply(lambda x: x)
+
+    # renaming variables
+    H1.columns = ['total_of_users', 'cities', 'pink_&_yellow_customers', 'customers_at_others_co']
+
+    # creating percentage customer_id variable
+    for i in range(len(H1)):
+        H1.loc[i, 'pink_&_yellow_customers_percent'] = ((H1.loc[i, 'pink_&_yellow_customers']) / (
+            H1.loc[i, 'total_of_users'])) * 100
+
+    # creating percentage others_cab_co variable
+    for i in range(len(H1)):
+        H1.loc[i, 'customers_at_others_co_percent'] = ((H1.loc[i, 'customers_at_others_co']) / (
+            H1.loc[i, 'total_of_users'])) * 100
+
+    st.dataframe(H1.sort_values('pink_&_yellow_customers_percent', ascending=False))
+
+    # _______________________________________________________________________________________________________________________
+    st.header('H2. The number of users of the Yellow Cab is higher than the company Pink Cab in each city.')
+    st.write(
+        '**FALSE - There are cities where the Pink cab company has more customers than the Yellow cab company, cities such: San Diego, Nashville, Sacramento and Pitsburgh.**')
+
+    aux3 = df2.drop_duplicates(subset=['customer_id'])
+    H2 = aux3[['cities', 'customer_id', 'company']].groupby(['cities', 'company']).count().reset_index()
+    H2.columns = ['cities', 'company_sum', 'customer_id_sum']
+
+    fig = px.bar(H2.sort_values('customer_id_sum', ascending=False), x='cities', y='customer_id_sum',
+                 color='company_sum', barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    # _______________________________________________________________________________________________________________________
+    st.header('H3. People uses more taxi during New Years Day than other holidays in all 3 years.')
+    st.write(
+        '**FALSE - In total, the holiday which people uses more taxis is Veterans Day, However, splitting this in years, 2016 and 2018, Thanksgiving Day is the holiday which people uses more taxis, and in 2017 the holiday is Veterans Day.**')
+
+    aux = df2[df2['holiday'] != 'Regular day']
+
+    c1, c2 = st.beta_columns((1, 1))
+    H3_1 = aux[['holiday', 'transaction_id', 'company']].groupby(['holiday', 'company']).count().reset_index()
+    H3_1.columns = ['holiday', 'company', 'transaction_id_sum']
+
+    fig = px.bar(H3_1.sort_values('transaction_id_sum', ascending=False), x='holiday', y='transaction_id_sum',
+                 color='company', barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    c1.plotly_chart(fig, use_container_width=True)
+
+    H3_2 = aux[['year', 'holiday', 'transaction_id']].groupby(['year', 'holiday']).count().reset_index()
+    H3_2.columns = ['year', 'holiday', 'transaction_id_sum']
+
+    fig = px.bar(H3_2.sort_values('transaction_id_sum', ascending=False), x='year', y='transaction_id_sum',
+                 color='holiday', barmode="group")
+    c2.plotly_chart(fig, use_container_width=True)
+
+    # _______________________________________________________________________________________________________________________
+    st.header(' H4. The number of users for each company increases WoW (Week over Week).')
+    st.write(
+        '**FALSE - The number of users for the company Yellow Cab company WoW (Week over Week) suffered a decrease of 2.26 percent. The number of users for the company Pink Cab company WoW (Week over Week) suffered a decrease of 2.39 percent.**')
+
+    aux = df2.drop_duplicates(subset=['customer_id'])
+
+    H4 = aux[['customer_id', 'year_week', 'company']].groupby(['year_week', 'company']).count().reset_index()
+    H4.columns = ['year_week', 'company', 'customer_id_sum']
+
+    # taxa de crescimento mensal simple, mes por mes
+    # (esse mes - mes passado) / mes passado
+    H4['WoW_percentage'] = ((H4['customer_id_sum'] - H4['customer_id_sum'].shift(1)) / H4['customer_id_sum'].shift(
+        1)) * 100
+
+    # taxa de crescimento mensal composta, o ultimo mes pelo primeiro mes contando todos os meses do meio
+    # (last/first)**(1/periods)-1
+    cmgr_1 = H4[H4['company'] == 'Yellow Cab'].reset_index()
+    cmgr_yellow = round((((cmgr_1.loc[158, 'customer_id_sum']) / (cmgr_1.loc[0, 'customer_id_sum'])) ** (
+            1 / (cmgr_1['customer_id_sum'].count() - 1)) - 1) * 100, 2)
+
+    cmgr_2 = H4[H4['company'] == 'Pink Cab'].reset_index()
+    cmgr_pink = round((((cmgr_2.loc[158, 'customer_id_sum']) / (cmgr_2.loc[0, 'customer_id_sum'])) ** (
+            1 / (cmgr_2['customer_id_sum'].count() - 1)) - 1) * 100, 2)
+
+    custom_chart = alt.Chart(H4).mark_line().encode(
+        x='year_week',
+        y='customer_id_sum',
+        color=alt.Color('company',
+                        scale=alt.Scale(
+                            domain=['Yellow Cab', 'Pink Cab'],
+                            range=['yellow', 'pink'])
+                        )
+    ).properties(
+        width=900,
+        height=500
+    )
+    st.altair_chart(custom_chart)
+
+    st.write(
+        '**The number of users for the company Yellow Cab company WoW (Week over Week) suffered a decrease of {} percent.**'.format(
+            cmgr_yellow), end='\n\n')
+    st.write(
+        '**The number of users for the company Pink Cab company WoW (Week over Week) suffered a decrease of {} percent.**'.format(
+            cmgr_pink), end='\n\n')
+
+    # _______________________________________________________________________________________________________________________
+    st.header(
+        ' H5. The amount of money made by the cab companies increase YoY (Year over Year) and MoM (Month over Month).')
+    st.write(
+        '**FALSE - The amount of money made by the company Yellow Cab company YoY (Year over Year) suffered a decrease of 1.48 percent. And the amount of money made by the company Pink Cab company YoY (Year over Year) suffered a decrease of 4.58 percent.**')
+    st.write(
+        '**However, the amount of money made by the company Yellow Cab company MoM (Month over Month) suffered an increase of 1.81 percent. And the amount of money made by the company Pink Cab company MoM (Month over Month) suffered an increase of 3.94 percent.**')
+
+    # YoY (Year over Year)
+    H5_1 = df2[['profit', 'year', 'company']].groupby(['year', 'company']).sum().reset_index()
+    H5_1.columns = ['year', 'company', 'profit_sum']
+
+    # taxa de crescimento mensal simple, mes por mes
+    # (esse mes - mes passado) / mes passado
+    H5_1['WoW_percentage'] = ((H5_1['profit_sum'] - H5_1['profit_sum'].shift(1)) / H5_1['profit_sum'].shift(1)) * 100
+
+    # taxa de crescimento mensal composta, o ultimo mes pelo primeiro mes contando todos os meses do meio
+    # (last/first)**(1/periods)-1
+    cmgr_1 = H5_1[H5_1['company'] == 'Yellow Cab'].reset_index()
+    cmgr_yellow_1 = round(
+        (((cmgr_1.loc[2, 'profit_sum']) / (cmgr_1.loc[0, 'profit_sum'])) ** (
+                1 / (cmgr_1['profit_sum'].count() - 1)) - 1) * 100, 2)
+
+    cmgr_2 = H5_1[H5_1['company'] == 'Pink Cab'].reset_index()
+    cmgr_pink_2 = round(
+        (((cmgr_2.loc[2, 'profit_sum']) / (cmgr_2.loc[0, 'profit_sum'])) ** (
+                1 / (cmgr_2['profit_sum'].count() - 1)) - 1) * 100, 2)
+
+    fig = px.line(H5_1, x='year', y='profit_sum', color='company', color_discrete_sequence=['pink', 'yellow'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.write(
+        '**The amount of money made by the company Yellow Cab company YoY (Year over Year)  suffered a decrease of {} percent.**'.format(
+            cmgr_yellow_1), end='\n\n')
+    st.write(
+        '**The amount of money made by the company Pink Cab company YoY (Year over Year)  suffered a decrease of {} percent.**'.format(
+            cmgr_pink_2), end='\n\n')
+
+    # MoM (Month over Month)
+    H5_2 = df2[['profit', 'year_month', 'company']].groupby(['year_month', 'company']).sum().reset_index()
+    H5_2.columns = ['year_month', 'company', 'profit_sum']
+
+    # taxa de crescimento mensal simple, mes por mes
+    # (esse mes - mes passado) / mes passado
+    H5_2['WoW_percentage'] = ((H5_2['profit_sum'] - H5_2['profit_sum'].shift(1)) / H5_2['profit_sum'].shift(1)) * 100
+
+    # taxa de crescimento mensal composta, o ultimo mes pelo primeiro mes contando todos os meses do meio
+    # (last/first)**(1/periods)-1
+    cmgr_3 = H5_2[H5_2['company'] == 'Yellow Cab'].reset_index()
+    cmgr_yellow_3 = round(
+        (((cmgr_3.loc[35, 'profit_sum']) / (cmgr_3.loc[0, 'profit_sum'])) ** (
+                1 / (cmgr_3['profit_sum'].count() - 1)) - 1) * 100, 2)
+
+    cmgr_4 = H5_2[H5_2['company'] == 'Pink Cab'].reset_index()
+    cmgr_pink_4 = round(
+        (((cmgr_4.loc[35, 'profit_sum']) / (cmgr_4.loc[0, 'profit_sum'])) ** (
+                1 / (cmgr_4['profit_sum'].count() - 1)) - 1) * 100, 2)
+
+    fig = px.line(H5_2, x='year_month', y='profit_sum', color='company', color_discrete_sequence=['pink', 'yellow'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.write(
+        '**The amount of money made by the company Yellow Cab company MoM (Month over Month) suffered an increase of {} percent.**'.format(
+            cmgr_yellow_3), end='\n\n')
+    st.write(
+        '**The amount of money made by the company Pink Cab company MoM (Month over Month) suffered an increase of {} percent.**'.format(
+            cmgr_pink_4), end='\n\n')
+
+    # _______________________________________________________________________________________________________________________
+    st.header(
+        ' H6. The number of travels made by the cab companies increase YoY (Year over Year) and MoM (Month over Month).')
+    st.write(
+        '**TRUE -  The number of travels made by the company Yellow Cab company YoY (Year over Year) suffered a decrease of 7.06 percent. And the number of travels made by the company Pink Cab company YoY (Year over Year) suffered a decrease of 8.01 percent.**')
+    st.write(
+        '**Also, the number of travels made by the company Yellow Cab company MoM (Month over Month) suffered an increase of 3.35 percent. And the number of travels of money made by the company Pink Cab company MoM (Month over Month) suffered an increase of 4.11 percent.**')
+
+    # YoY (Year over Year)
+    H6_1 = df2[['transaction_id', 'year', 'company']].groupby(['year', 'company']).count().reset_index()
+    H6_1.columns = ['year', 'company', 'transaction_id_sum']
+
+    # taxa de crescimento mensal simple, mes por mes
+    # (esse mes - mes passado) / mes passado
+    H6_1['WoW_percentage'] = ((H6_1['transaction_id_sum'] - H6_1['transaction_id_sum'].shift(1)) / H6_1[
+        'transaction_id_sum'].shift(
+        1)) * 100
+
+    # taxa de crescimento mensal composta, o ultimo mes pelo primeiro mes contando todos os meses do meio
+    # (last/first)**(1/periods)-1
+    cmgr_1 = H6_1[H6_1['company'] == 'Yellow Cab'].reset_index()
+    cmgr_yellow_1 = round((((cmgr_1.loc[2, 'transaction_id_sum']) / (cmgr_1.loc[0, 'transaction_id_sum'])) ** (
+            1 / (cmgr_1['transaction_id_sum'].count() - 1)) - 1) * 100, 2)
+
+    cmgr_2 = H6_1[H6_1['company'] == 'Pink Cab'].reset_index()
+    cmgr_pink_2 = round((((cmgr_2.loc[2, 'transaction_id_sum']) / (cmgr_2.loc[0, 'transaction_id_sum'])) ** (
+            1 / (cmgr_2['transaction_id_sum'].count() - 1)) - 1) * 100, 2)
+
+    fig = px.line(H6_1, x='year', y='transaction_id_sum', color='company', color_discrete_sequence=['pink', 'yellow'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.write(
+        '**The number of travels for the company Yellow Cab company  YoY (Year over Year)  suffered an increase of {} percent.**'.format(
+            cmgr_yellow_1), end='\n\n')
+    st.write(
+        '**The number of travels for the company Pink Cab company  YoY (Year over Year)  suffered an increase of {} percent.**'.format(
+            cmgr_pink_2), end='\n\n')
+
+    # MoM (Month over Month)
+    H6_2 = df2[['transaction_id', 'year_month', 'company']].groupby(['year_month', 'company']).count().reset_index()
+    H6_2.columns = ['year_month', 'company', 'transaction_id_sum']
+
+    # taxa de crescimento mensal simple, mes por mes
+    # (esse mes - mes passado) / mes passado
+    H6_2['WoW_percentage'] = ((H6_2['transaction_id_sum'] - H6_2['transaction_id_sum'].shift(1)) / H6_2[
+        'transaction_id_sum'].shift(
+        1)) * 100
+
+    # taxa de crescimento mensal composta, o ultimo mes pelo primeiro mes contando todos os meses do meio
+    # (last/first)**(1/periods)-1
+    cmgr_3 = H6_2[H6_2['company'] == 'Yellow Cab'].reset_index()
+    cmgr_yellow_3 = round((((cmgr_3.loc[35, 'transaction_id_sum']) / (cmgr_3.loc[0, 'transaction_id_sum'])) ** (
+            1 / (cmgr_3['transaction_id_sum'].count() - 1)) - 1) * 100, 2)
+
+    cmgr_4 = H6_2[H6_2['company'] == 'Pink Cab'].reset_index()
+    cmgr_pink_4 = round((((cmgr_4.loc[35, 'transaction_id_sum']) / (cmgr_4.loc[0, 'transaction_id_sum'])) ** (
+            1 / (cmgr_4['transaction_id_sum'].count() - 1)) - 1) * 100, 2)
+
+    fig = px.line(H6_2, x='year_month', y='transaction_id_sum', color='company',
+                  color_discrete_sequence=['pink', 'yellow'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.write(
+        '**The number of travels made by the company Yellow Cab company  MoM (Month over Month) suffered an increase of {} percent.**'.format(
+            cmgr_yellow_3), end='\n\n')
+    st.write(
+        '**The number of travels made by the company Pink Cab company  MoM (Month over Month) suffered an increase of {} percent.**'.format(
+            cmgr_pink_4), end='\n\n')
+
+    # _______________________________________________________________________________________________________________________
+    st.header(' H7.  Companies make more profit during second semester of the year.')
+    st.write(
+        '**TRUE - In total and in the second semester, the company Yellow Cab make $3770264.7852 (7.64%) more profit than the first semester.**')
+    st.write(
+        '**And in the second semester, the company Pink Cab make $2134648.873 (4.33%) more profit than the first semester.**')
+
+    H7 = df2[['month', 'profit', 'company']].groupby(['month', 'company']).sum().reset_index()
+
+    H7['semester'] = H7['month'].apply(lambda x: 'first' if x <= 6 else
+    'second')
+
+    H7.columns = ['month', 'company', 'profit_sum', 'semester']
+
+    H7_1 = H7[['semester', 'profit_sum', 'company']].groupby(['semester', 'company']).sum().reset_index()
+
+    for i in range(len(H7_1)):
+        H7_1.loc[i, 'percentage'] = (H7_1.loc[i, 'profit_sum']) / (sum(H7_1['profit_sum'])) * 100
+
+    H7_1_difference_yellow = H7_1.loc[3, 'profit_sum'] - H7_1.loc[1, 'profit_sum']
+    H7_1_percentage_yellow = round((H7_1.loc[3, 'percentage']) - (H7_1.loc[1, 'percentage']), 2)
+
+    H7_1_difference_pink = H7_1.loc[2, 'profit_sum'] - H7_1.loc[0, 'profit_sum']
+    H7_1_percentage_pink = round((H7_1.loc[2, 'percentage']) - (H7_1.loc[0, 'percentage']), 2)
+
+    st.dataframe(H7_1, height=600)
+    st.write(
+        '**In total and in the second semester, the company {} make ${} ({}%) more profit than the first semester.**'.format(
+            H7.iloc[3, 1], H7_1_difference_yellow, H7_1_percentage_yellow), end='\n\n')
+    st.write(
+        '**And in the second semester, the company {} make ${} ({}%) more profit than the first semester.**'.format(
+            H7.iloc[2, 1], H7_1_difference_pink, H7_1_percentage_pink), end='\n\n')
+
+    fig = px.bar(H7_1, x='semester', y='profit_sum', color='company', barmode="group",
+                 color_discrete_sequence=['yellow', 'pink'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    fig = px.scatter(H7, x="month", y="profit_sum", trendline="ols")
+    st.plotly_chart(fig, use_container_width=True)
+
+    fig = px.bar(H7, x='month', y='profit_sum', color='company', barmode="group",
+                 color_discrete_sequence=['yellow', 'pink'])
+    st.plotly_chart(fig, use_container_width=True)
+
+    # _______________________________________________________________________________________________________________________
+    st.header(' H8. People with the amount of income higher than the median uses more taxis.')
+    st.write(
+        '**FALSE - People with the amount of income higher than the median uses less taxi than people which has income inferior than median, however this difference is minimal, which is 1 for Pink Cab company and 3 for Yellow Cab company.**')
+
+    aux = df2.drop_duplicates(subset=['customer_id'])
+    income_USD_median = aux[['income_USD_month', 'company']].groupby('company').median().reset_index()
+    income_USD_median.columns = ['company', 'income_median']
+
+    H8 = pd.merge(aux, income_USD_median, on='company', how='inner')
+
+    H8['income_is_higher_than_median'] = H8.apply(lambda x: 'yes' if (x['income_USD_month'] > x['income_median']) else
+    'no', axis=1)
+
+    H8_1 = H8[['customer_id', 'income_is_higher_than_median', 'company']].groupby(
+        ['income_is_higher_than_median', 'company']).count().reset_index()
+
+    H8_1.columns = ['income_is_higher_than_median', 'company', 'customer_id_sum']
+
+    H8_1_1_difference = H8_1.iloc[1, 2] - H8_1.iloc[3, 2]
+    H8_1_2_difference = H8_1.iloc[0, 2] - H8_1.iloc[2, 2]
+
+    c1, c2 = st.beta_columns((1, 1))
+    fig = px.bar(H8_1.sort_values('customer_id_sum', ascending=False), x='income_is_higher_than_median',
+                 y='customer_id_sum', color='company', barmode="group", color_discrete_sequence=['yellow', 'pink'])
+    c1.plotly_chart(fig, use_container_width=True)
+
+    c2.dataframe(H8_1, height=600)
+    st.write(
+        '**For the company Pink Cab, the number of customers which income is inferior than median is {} more than customers which income is inferior than median.**'.format(
+            H8_1_2_difference))
+    st.write(
+        '**For the company Yellow Cab, the number of customers which income is inferior than median is {} more than customers which income is inferior than median.**'.format(
+            H8_1_1_difference))
+
+    # _______________________________________________________________________________________________________________________
+    st.header(' H9. Men use more cash than women for payment.')
+    st.write('**TRUE - In total, the number of men using cash is 20978 (5.84%) more than women.**')
+
+    H9 = df2[['transaction_id', 'gender', 'payment_mode']].groupby(['payment_mode', 'gender']).count().reset_index()
+    H9.columns = ['payment_mode', 'gender', 'transaction_id_sum']
+
+    for i in range(len(H9)):
+        H9.loc[i, 'percentage'] = (H9.loc[i, 'transaction_id_sum']) / (sum(H9['transaction_id_sum'])) * 100
+
+    H9_difference = H9.loc[3, 'transaction_id_sum'] - H9.loc[2, 'transaction_id_sum']
+    H9_percentage = round((H9.loc[3, 'percentage']) - (H9.loc[2, 'percentage']), 2)
+
+    c1, c2 = st.beta_columns((1, 1))
+    fig = px.bar(H9.sort_values('transaction_id_sum', ascending=False), x='payment_mode', y='transaction_id_sum',
+                 color='gender', barmode="group")
+    c1.plotly_chart(fig, use_container_width=True)
+
+    c2.dataframe(H9, height=600)
+    st.write(
+        '**In total, the number of men using cash is {} ({}%) more than women.**'.format(H9_difference, H9_percentage),
+        end='\n\n')
+
+    # _______________________________________________________________________________________________________________________
+    st.header(' H10. Young people use more taxis than old people.')
+    st.write('**TRUE - In total, there are 166884 (46.44%) young people more using taxi than old people.**')
+
+    H10 = df2[['age', 'transaction_id']].groupby('age').count().reset_index()
+
+    H10['age_rate'] = H10['age'].apply(lambda x: 'young' if x <= 40 else
+    'old')
+
+    H10.columns = ['age', 'transaction_id_sum', 'age_rate']
+
+    H10_1 = H10[['age_rate', 'transaction_id_sum']].groupby('age_rate').sum().reset_index()
+
+    for i in range(len(H10_1)):
+        H10_1.loc[i, 'percentage'] = (H10_1.loc[i, 'transaction_id_sum']) / (sum(H10_1['transaction_id_sum'])) * 100
+
+    H10_1_difference = H10_1.loc[1, 'transaction_id_sum'] - H10_1.loc[0, 'transaction_id_sum']
+
+    H10_1_percentage = round((H10_1.loc[1, 'percentage']) - (H10_1.loc[0, 'percentage']), 2)
+
+    st.dataframe(H10_1, height=600)
+
+    fig = px.bar(H10, x='age', y='transaction_id_sum', color='age')
+    st.plotly_chart(fig, use_container_width=True)
+
+    fig = px.scatter(H10, x='age', y='transaction_id_sum', trendline="ols")
+    st.plotly_chart(fig, use_container_width=True)
+
+    fig = px.bar(H10_1.sort_values('transaction_id_sum', ascending=False), x='age_rate', y='transaction_id_sum',
+                 color='age_rate')
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.write('**In total, there are {} ({}%) young people more using taxi than old people.**'.format(H10_1_difference,
+                                                                                                     H10_1_percentage),
+             end='\n\n')
+
+    # _______________________________________________________________________________________________________________________
+    st.title('Final Result')
+    st.write('**Yellow Cab Company has that percentage higher than Pink Cab Company:**')
+    st.write('**Number of taxi trips (52.86%);**')
+    st.write('**Profit (78.48%);**')
+    st.write('**Number of customers (35.73%).**')
+
+    st.title('Conclusion')
+    st.write(
+        '**In conclusion, Yellow Cab Company has a higher number of taxi trips than Pink Cab Company, as well as a higher profit and higher number of customers.**')
+    st.write(
+        '**The data also show that Yellow Cab has superior results in almost all cities, especially in New York, which is the city with the highest profit and higher number of taxi trips.**')
+    st.write(
+        '**The same company also stands out from the other company in relation to the season, where the fall or spring (depending which measure is more important) season shows the highest profit and number of taxi trips as well.**')
+    st.write(
+        '**Also other insights provided by the hypotheses, inform that Yellow Cab Company present better results than Pink Cab Company, however some of them shows that the number of taxi trips, the profit and the number of customers, for both Companies, are decreasing over the year, giving space for other Cab companies.**')
+    st.write('**Due those all information, it is recommended to invest in Yellow Cab Company.**')
+
+    st.title('Next Steps')
+    st.write(
+        '**Other project that can be made with this dataset is the exploration data analyses, which identify the best’s attributes in order to apply machine learning algorithms, with the objective to predict the number of taxi trips, the profit or the number of customers for each company.**')
+
+    return None
+
+
+if __name__ == '__main__':
+    # ETL
+    # data extraction
+    path1 = 'Cab_Data.csv'
+    path2 = 'City.csv'
+    path3 = 'Customer_ID.csv'
+    path4 = 'states.csv'
+    path5 = 'Transaction_ID.csv'
+    path6 = 'us-federal-holidays-2011-2020.csv'
+
+    df_cab_data_raw = get_data(path1)
+    df_city_raw = get_data(path2)
+    df_customer_id_raw = get_data(path3)
+    df_states_raw = get_data(path4)
+    df_transaction_id_raw = get_data(path5)
+    df_us_holidays_raw = get_data(path6)
+
+    # transformatiom
+    data = preparation(df_cab_data_raw, df_transaction_id_raw, df_customer_id_raw, df_us_holidays_raw)
+
+    data = description(data)
+
+    data = feature_engineering(data)
+
+    outliers_detection(data)
+
+    business_questions(data)
+
+    Hypotesis(data, df_city_raw)
